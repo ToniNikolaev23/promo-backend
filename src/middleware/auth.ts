@@ -1,7 +1,9 @@
+import { and, eq, gt } from "drizzle-orm";
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { config } from "../config.js";
-import { sql } from "../db.js";
+import { db } from "../db.js";
+import { jwtTokens } from "../schema.js";
 import type { AuthTokenPayload } from "../types.js";
 
 export type AuthenticatedRequest = Request & {
@@ -50,14 +52,17 @@ export const requireAuth = async (
     return;
   }
 
-  const tokenRows = await sql`
-    SELECT user_id
-    FROM jwt_tokens
-    WHERE jti = ${payload.jti}
-      AND user_id = ${payload.sub}
-      AND expires_at > NOW()
-    LIMIT 1
-  `;
+  const tokenRows = await db
+    .select({ userId: jwtTokens.userId })
+    .from(jwtTokens)
+    .where(
+      and(
+        eq(jwtTokens.jti, payload.jti),
+        eq(jwtTokens.userId, payload.sub),
+        gt(jwtTokens.expiresAt, new Date())
+      )
+    )
+    .limit(1);
 
   if (tokenRows.length === 0) {
     res.status(401).json({ error: "Token revoked or expired." });

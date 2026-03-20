@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
+import { eq } from "drizzle-orm";
 import express from "express";
 import jwt, { type SignOptions } from "jsonwebtoken";
 import { z } from "zod";
 import { config } from "./config.js";
-import { sql } from "./db.js";
+import { db } from "./db.js";
 import { requireAuth, type AuthenticatedRequest } from "./middleware/auth.js";
-import type { UserRow } from "./types.js";
+import { jwtTokens, users } from "./schema.js";
+import { computeExpiresAt } from "./utils/tokenExpiry.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -29,20 +31,16 @@ app.post("/login", async (req, res) => {
   }
 
   const { email, password } = parsed.data;
-  const userRows = (await sql`
-    SELECT id, email, password_hash, created_at
-    FROM users
-    WHERE email = ${email}
-    LIMIT 1
-  `) as UserRow[];
+  const user = await db.query.users.findFirst({
+    where: eq(users.email, email)
+  });
 
-  if (userRows.length === 0) {
+  if (!user) {
     res.status(401).json({ error: "Invalid credentials." });
     return;
   }
 
-  const user = userRows[0];
-  const validPassword = await bcrypt.compare(password, user.password_hash);
+  const validPassword = await bcrypt.compare(password, user.passwordHash);
 
   if (!validPassword) {
     res.status(401).json({ error: "Invalid credentials." });
@@ -60,14 +58,14 @@ app.post("/login", async (req, res) => {
     { expiresIn: config.jwtExpiresIn as SignOptions["expiresIn"] }
   );
 
-  await sql`
-    INSERT INTO jwt_tokens (user_id, jti, expires_at)
-    VALUES (
-      ${user.id},
-      ${jti},
-      NOW() + (${config.jwtExpiresIn}::text)::interval
-    )
-  `;
+  // Keep only one active token per user by replacing previous ones.
+  await db.delete(jwtTokens).where(eq(jwtTokens.userId, user.id));
+
+  await db.insert(jwtTokens).values({
+    userId: user.id,
+    jti,
+    expiresAt: computeExpiresAt(config.jwtExpiresIn)
+  });
 
   res.json({
     token,
@@ -78,11 +76,13 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/logout", requireAuth, async (req: AuthenticatedRequest, res) => {
-  await sql`
-    DELETE FROM jwt_tokens
-    WHERE jti = ${req.auth?.jti}
-      AND user_id = ${req.auth?.userId}
-  `;
+  const auth = req.auth;
+  if (!auth) {
+    res.status(401).json({ error: "Unauthorized." });
+    return;
+  }
+
+  await db.delete(jwtTokens).where(eq(jwtTokens.userId, auth.userId));
 
   res.json({ success: true });
 });

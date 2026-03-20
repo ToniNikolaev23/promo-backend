@@ -1,6 +1,6 @@
 # Promotions Backend (Node + Express + TypeScript)
 
-Backend API ready for Vercel hosting and Neon Postgres.
+Backend API ready for Vercel hosting and Neon Postgres, using Drizzle ORM.
 
 ## Endpoints
 

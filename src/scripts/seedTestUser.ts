@@ -1,30 +1,36 @@
 import bcrypt from "bcryptjs";
-import { sql } from "../db.js";
+import { eq } from "drizzle-orm";
+import { client, db } from "../db.js";
+import { users } from "../schema.js";
 
 const TEST_EMAIL = "test@test.com";
 const TEST_PASSWORD = "password";
 
 const run = async (): Promise<void> => {
-  const existing = await sql`
-    SELECT id FROM users WHERE email = ${TEST_EMAIL} LIMIT 1
-  `;
+  const existing = await db.query.users.findFirst({
+    where: eq(users.email, TEST_EMAIL)
+  });
 
-  if (existing.length > 0) {
+  if (existing) {
     console.log("Test user already exists.");
     return;
   }
 
   const passwordHash = await bcrypt.hash(TEST_PASSWORD, 10);
 
-  await sql`
-    INSERT INTO users (email, password_hash)
-    VALUES (${TEST_EMAIL}, ${passwordHash})
-  `;
+  await db.insert(users).values({
+    email: TEST_EMAIL,
+    passwordHash
+  });
 
   console.log("Test user created: test@test.com / password");
 };
 
-run().catch((error: unknown) => {
-  console.error("Failed to seed test user:", error);
-  process.exit(1);
-});
+run()
+  .catch((error: unknown) => {
+    console.error("Failed to seed test user:", error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await client.end();
+  });

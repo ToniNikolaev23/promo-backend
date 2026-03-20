@@ -6,12 +6,15 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.app = void 0;
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const drizzle_orm_1 = require("drizzle-orm");
 const express_1 = __importDefault(require("express"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const zod_1 = require("zod");
 const config_js_1 = require("./config.js");
 const db_js_1 = require("./db.js");
 const auth_js_1 = require("./middleware/auth.js");
+const schema_js_1 = require("./schema.js");
+const tokenExpiry_js_1 = require("./utils/tokenExpiry.js");
 const loginSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string().min(1)
@@ -28,18 +31,14 @@ exports.app.post("/login", async (req, res) => {
         return;
     }
     const { email, password } = parsed.data;
-    const userRows = (await (0, db_js_1.sql) `
-    SELECT id, email, password_hash, created_at
-    FROM users
-    WHERE email = ${email}
-    LIMIT 1
-  `);
-    if (userRows.length === 0) {
+    const user = await db_js_1.db.query.users.findFirst({
+        where: (0, drizzle_orm_1.eq)(schema_js_1.users.email, email)
+    });
+    if (!user) {
         res.status(401).json({ error: "Invalid credentials." });
         return;
     }
-    const user = userRows[0];
-    const validPassword = await bcryptjs_1.default.compare(password, user.password_hash);
+    const validPassword = await bcryptjs_1.default.compare(password, user.passwordHash);
     if (!validPassword) {
         res.status(401).json({ error: "Invalid credentials." });
         return;
@@ -50,14 +49,13 @@ exports.app.post("/login", async (req, res) => {
         email: user.email,
         jti
     }, config_js_1.config.jwtSecret, { expiresIn: config_js_1.config.jwtExpiresIn });
-    await (0, db_js_1.sql) `
-    INSERT INTO jwt_tokens (user_id, jti, expires_at)
-    VALUES (
-      ${user.id},
-      ${jti},
-      NOW() + (${config_js_1.config.jwtExpiresIn}::text)::interval
-    )
-  `;
+    // Keep only one active token per user by replacing previous ones.
+    await db_js_1.db.delete(schema_js_1.jwtTokens).where((0, drizzle_orm_1.eq)(schema_js_1.jwtTokens.userId, user.id));
+    await db_js_1.db.insert(schema_js_1.jwtTokens).values({
+        userId: user.id,
+        jti,
+        expiresAt: (0, tokenExpiry_js_1.computeExpiresAt)(config_js_1.config.jwtExpiresIn)
+    });
     res.json({
         token,
         user: {
@@ -66,11 +64,12 @@ exports.app.post("/login", async (req, res) => {
     });
 });
 exports.app.post("/logout", auth_js_1.requireAuth, async (req, res) => {
-    await (0, db_js_1.sql) `
-    DELETE FROM jwt_tokens
-    WHERE jti = ${req.auth?.jti}
-      AND user_id = ${req.auth?.userId}
-  `;
+    const auth = req.auth;
+    if (!auth) {
+        res.status(401).json({ error: "Unauthorized." });
+        return;
+    }
+    await db_js_1.db.delete(schema_js_1.jwtTokens).where((0, drizzle_orm_1.eq)(schema_js_1.jwtTokens.userId, auth.userId));
     res.json({ success: true });
 });
 exports.app.get("/me", auth_js_1.requireAuth, (req, res) => {

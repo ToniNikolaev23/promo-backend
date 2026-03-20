@@ -4,9 +4,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireAuth = void 0;
+const drizzle_orm_1 = require("drizzle-orm");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const config_js_1 = require("../config.js");
 const db_js_1 = require("../db.js");
+const schema_js_1 = require("../schema.js");
 const getBearerToken = (headerValue) => {
     if (!headerValue) {
         return null;
@@ -35,14 +37,11 @@ const requireAuth = async (req, res, next) => {
         res.status(401).json({ error: "Invalid token payload." });
         return;
     }
-    const tokenRows = await (0, db_js_1.sql) `
-    SELECT user_id
-    FROM jwt_tokens
-    WHERE jti = ${payload.jti}
-      AND user_id = ${payload.sub}
-      AND expires_at > NOW()
-    LIMIT 1
-  `;
+    const tokenRows = await db_js_1.db
+        .select({ userId: schema_js_1.jwtTokens.userId })
+        .from(schema_js_1.jwtTokens)
+        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_js_1.jwtTokens.jti, payload.jti), (0, drizzle_orm_1.eq)(schema_js_1.jwtTokens.userId, payload.sub), (0, drizzle_orm_1.gt)(schema_js_1.jwtTokens.expiresAt, new Date())))
+        .limit(1);
     if (tokenRows.length === 0) {
         res.status(401).json({ error: "Token revoked or expired." });
         return;
